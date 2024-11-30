@@ -1,181 +1,114 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
-from datetime import datetime, timedelta
-from sklearn.model_selection import train_test_split
+import streamlit as st
+import pandas as pd
+import requests
+import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
-import plotly.express as px
-import plotly.graph_objects as go
-import joblib
-import time
+import numpy as np
 
-# Page configuration
-st.set_page_config(
-    page_title="Crude Oil Price Prediction Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
+# OilPriceAPI key
+API_KEY = '2712e3c889f666a399bbd6e230d7f391'
 
-# Title and description
-st.title("🛢️ Crude Oil Price Real-Time Prediction Dashboard")
-st.markdown("""
-This dashboard provides real-time crude oil price analysis and predictions using machine learning.
-Data is updated every minute to simulate real-time market conditions.
-""")
+# Function to fetch the latest oil price
+def fetch_latest_oil_price(api_key):
+    url = "https://api.oilpriceapi.com/v1/prices/latest"
+    headers = {'Authorization': f'Bearer {api_key}'}
+    response = requests.get(url, headers=headers)
 
-# Function to simulate real-time data by fetching from Yahoo Finance
-@st.cache_data(ttl=60)  # Cache for 60 seconds
-def fetch_real_time_data():
-    try:
-        # Fetch WTI Crude Oil data
-        oil_data = yf.download("CL=F", period="1y", interval="1d")
-        df = oil_data.reset_index()
-        
-        # Prepare features
-        df['Date'] = pd.to_datetime(df['Date'])
-        df['Hour'] = df['Date'].dt.hour
-        df['DayOfWeek'] = df['Date'].dt.dayofweek
-        df['Month'] = df['Date'].dt.month
-        df['Volume_MA'] = df['Volume'].rolling(window=5).mean()
-        df['Price_MA5'] = df['Close'].rolling(window=5).mean()
-        df['Price_MA20'] = df['Close'].rolling(window=20).mean()
-        df['Volatility'] = df['Close'].pct_change().rolling(window=20).std()
-        
-        # Fill NaN values
-        df = df.fillna(method='bfill')
-        
-        return df
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+    if response.status_code == 200:
+        data = response.json()
+        if 'data' in data:
+            return data['data']['price']
+        else:
+            st.error("Error: 'data' field not found in the response.")
+            return None
+    else:
+        st.error(f"Error fetching latest oil price: {response.status_code}")
         return None
 
-# Function to train/load ML model
-@st.cache_resource
-def get_model(df):
+# Load historical data from a CSV file
+@st.cache
+def load_historical_data():
+    # Replace with a valid dataset URL or local path
+    data_path = 'https://www.kaggleusercontent.com/sc231997/crude-oil-price'  # Update if needed
     try:
-        # Prepare features for training
-        features = ['Hour', 'DayOfWeek', 'Month', 'Volume_MA', 
-                   'Price_MA5', 'Price_MA20', 'Volatility']
-        X = df[features]
-        y = df['Close']
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        
-        # Train model
-        model = LinearRegression()
-        model.fit(X_train_scaled, y_train)
-        
-        return model, scaler, features
+        df = pd.read_csv(data_path)
+        df = df[['date', 'price']]  # Ensure required columns exist
+        df['date'] = pd.to_datetime(df['date'])
+        return df
     except Exception as e:
-        st.error(f"Error training model: {str(e)}")
-        return None, None, None
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
 
-# Main dashboard
-def main():
-    # Fetch data
-    df = fetch_real_time_data()
-    
-    if df is not None:
-        # Train/load model
-        model, scaler, features = get_model(df)
-        
-        if model is not None:
-            # Dashboard layout
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.subheader("Real-Time Price Chart")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'],
-                                       mode='lines',
-                                       name='Actual Price'))
-                fig.update_layout(
-                    xaxis_title="Date",
-                    yaxis_title="Price (USD)",
-                    height=400
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.subheader("Current Statistics")
-                current_price = df['Close'].iloc[-1]
-                price_change = df['Close'].iloc[-1] - df['Close'].iloc[-2]
-                price_change_pct = (price_change / df['Close'].iloc[-2]) * 100
-                
-                st.metric("Current Price", f"${current_price:.2f}",
-                         f"{price_change:.2f} ({price_change_pct:.2f}%)")
-                
-                st.metric("30-Day Volatility", 
-                         f"{df['Volatility'].iloc[-1]*100:.2f}%")
-                
-                st.metric("Volume (MA5)", 
-                         f"{df['Volume_MA'].iloc[-1]:,.0f}")
-            
-            # Predictions section
-            st.subheader("Price Predictions")
-            
-            # Prepare latest data for prediction
-            latest_features = df[features].iloc[-1:].copy()
-            latest_features_scaled = scaler.transform(latest_features)
-            prediction = model.predict(latest_features_scaled)[0]
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric("Predicted Next Price", 
-                         f"${prediction:.2f}",
-                         f"{prediction - current_price:.2f}")
-            
-            with col2:
-                confidence = model.score(
-                    scaler.transform(df[features]), df['Close'])
-                st.metric("Model Confidence", f"{confidence:.2%}")
-            
-            # Technical Analysis
-            st.subheader("Technical Analysis")
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Close'],
-                                   mode='lines',
-                                   name='Price'))
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Price_MA5'],
-                                   mode='lines',
-                                   name='MA5'))
-            fig.add_trace(go.Scatter(x=df['Date'], y=df['Price_MA20'],
-                                   mode='lines',
-                                   name='MA20'))
-            fig.update_layout(
-                title="Moving Averages",
-                xaxis_title="Date",
-                yaxis_title="Price (USD)",
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Historical Data Table
-            st.subheader("Historical Data")
-            st.dataframe(
-                df[['Date', 'Close', 'Volume', 'Price_MA5', 'Price_MA20', 'Volatility']]
-                .tail(10)
-                .style.format({
-                    'Close': '${:.2f}',
-                    'Volume': '{:,.0f}',
-                    'Price_MA5': '${:.2f}',
-                    'Price_MA20': '${:.2f}',
-                    'Volatility': '{:.2%}'
-                })
-            )
-            
-            # Add auto-refresh
-            st.empty()
+historical_data = load_historical_data()
+
+# Display the latest oil price
+latest_price = fetch_latest_oil_price(API_KEY)
+if latest_price:
+    st.write(f"Latest Oil Price: ${latest_price:.2f}")
+
+# Display historical data
+if not historical_data.empty:
+    st.write("Historical Data:")
+    st.dataframe(historical_data)
+
+# Function to train a model and predict future prices
+def predict_prices(data, hours):
+    data['timestamp'] = data['date'].astype(int) / 10**9  # Convert datetime to Unix timestamp
+    X = data['timestamp'].values.reshape(-1, 1)
+    y = data['price'].values
+
+    # Train the Linear Regression model
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Generate future timestamps for hourly predictions
+    future_timestamps = np.array(
+        [(data['timestamp'].max() + i * 3600) for i in range(1, hours + 1)]
+    ).reshape(-1, 1)
+
+    # Predict prices for future timestamps
+    predicted_prices = model.predict(future_timestamps)
+    predicted_dates = [pd.to_datetime(ts * 10**9) for ts in future_timestamps.flatten()]
+
+    return predicted_dates, predicted_prices
+
+# Input for hours to forecast
+hours_to_forecast = st.number_input("Enter number of hours to forecast", min_value=1, step=1, value=24)
+
+if hours_to_forecast and not historical_data.empty:
+    # Predict future prices
+    predicted_dates, predicted_prices = predict_prices(historical_data, hours_to_forecast)
+
+    # Create DataFrame for predictions
+    predictions_df = pd.DataFrame({
+        'Time': predicted_dates,
+        'Predicted Price (USD)': predicted_prices
+    })
+
+    # Display predictions
+    st.write(f"Predicted Prices for the Next {hours_to_forecast} Hours:")
+    st.dataframe(predictions_df)
+
+    # Plot predictions
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(predictions_df['Time'], predictions_df['Predicted Price (USD)'], marker='o', color='b', label='Predicted Price')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Price (USD)')
+    ax.set_title(f'Predicted Crude Oil Prices for the Next {hours_to_forecast} Hours')
+    ax.grid(True)
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+    # Display percentage change and price change
+    price_change = predicted_prices[-1] - predicted_prices[0]
+    percentage_change = (price_change / predicted_prices[0]) * 100
+    st.write(f"Price Change: ${price_change:.2f}")
+    st.write(f"Percentage Change: {percentage_change:.2f}%")
+else:
+    st.warning("Please load valid historical data or adjust forecast parameters.")
             time.sleep(60)  # Refresh every 60 seconds
             st.experimental_rerun()
 
